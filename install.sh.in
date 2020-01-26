@@ -1,0 +1,49 @@
+#!/bin/bash -e
+
+SOURCES_LIST_TMP=""
+APT_REPO_TMP=""
+
+on_exit() {
+	if [ -n "${SOURCES_LIST_TMP}" ]; then
+		if [ -f ${SOURCES_LIST_TMP}/sources.list ]; then
+			rm -f /etc/apt/sources.list
+			mv ${SOURCES_LIST_TMP}/sources.list /etc/apt/
+		fi
+		if [ -d ${SOURCES_LIST_TMP}/sources.list.d/ ]; then
+			rm -rf /etc/apt/sources.list.d/
+			mv ${SOURCES_LIST_TMP}/sources.list.d /etc/apt/
+		fi
+		rm -rf ${SOURCES_LIST_TMP}
+	fi
+	if [ -n "${APT_REPO_TMP}" ]; then
+		rm -rf ${APT_REPO_TMP}
+	fi
+}
+
+main() {
+	# Backup sources list
+	SOURCES_LIST_TMP="$(mktemp -d)"
+	if [ -f /etc/apt/sources.list ]; then
+		mv /etc/apt/sources.list ${SOURCES_LIST_TMP}
+	fi
+	if [ -d /etc/apt/sources.list.d/ ]; then
+		mv /etc/apt/sources.list.d/ ${SOURCES_LIST_TMP}
+	fi
+
+	# Build local repo
+	APT_REPO_TMP="$(mktemp -d)"
+	ARCHIVE_START="$(awk '/^__ARCHIVE_BELOW__/ {print NR + 1; exit 0;}' $0)"
+	tail -n+${ARCHIVE_START} $0 | tar -zx -C ${APT_REPO_TMP}
+	# Create sources list
+	echo "deb [trusted=yes] file://${APT_REPO_TMP} ./" > /etc/apt/sources.list
+
+	apt-get update -qq
+	apt-get install -qq -y @INST_PKG@
+	return 0
+}
+
+trap "on_exit" INT TERM EXIT
+main
+exit 0
+
+__ARCHIVE_BELOW__

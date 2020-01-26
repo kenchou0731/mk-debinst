@@ -1,0 +1,72 @@
+#!/bin/bash -e
+# SPDX-License-Identifier: Apache-2.0
+#
+# `mk-debinst` is a tool for creating self-extracted
+# Debian packages install script on Debian-based systems.
+#
+# Authors: Ken Chou	<kenchou0731@gmail.com>
+
+SCRIPT_PATH="$(readlink -f $0)"
+SCRIPT_PATH="$(dirname ${SCRIPT_PATH})"
+
+on_exit() {
+	if [ -n "${REPO_TMP}" ]; then
+		rm -rf ${REPO_TMP}
+	fi
+}
+
+process_debs() {
+	local deb deb_info deb_pname deb_ver deb_arch
+
+	INST_PKG=""
+	DEBS_LIST=""
+	for deb in $@; do
+		deb_info="$(dpkg -I ${deb})"
+		if [ $? -ne 0 ]; then
+			return 1
+		fi
+		deb_pname="$(echo "${deb_info}" | grep "^ Package:" | awk '{print $2}')"
+		deb_ver="$(echo "${deb_info}" | grep "^ Version:" | awk '{print $2}')"
+		deb_arch="$(echo "${deb_info}" | grep "^ Architecture:" | awk '{print $2}')"
+		if [ -z "${DEBS_LIST}" ]; then
+			DEBS_LIST="${deb_pname}, ${deb_ver}, ${deb_arch}"
+		else
+			DEBS_LIST="${DEBS_LIST}\n${deb_pname}, ${deb_ver}, ${deb_arch}"
+		fi
+		INST_PKG+=" ${deb_pname}"
+		cp ${deb} ${REPO_TMP}
+	done
+}
+
+main() {
+	REPO_TMP=""
+	trap "on_exit" INT TERM EXIT
+	REPO_TMP="$(mktemp -d)"
+
+	# Build repo archive
+	process_debs "$@"
+	(
+		cd ${REPO_TMP}
+		apt-ftparchive packages ./ > Packages
+		tar -zcf repo.tgz *
+	)
+	# Create install script
+	cp ${SCRIPT_PATH}/install.sh.in ${REPO_TMP}/install.sh
+	sed -i "s/@INST_PKG@/${INST_PKG}/g" ${REPO_TMP}/install.sh
+	# Combine
+	cat ${REPO_TMP}/install.sh ${REPO_TMP}/repo.tgz > ${SCRIPT_PATH}/install.sh
+	chmod +x ${SCRIPT_PATH}/install.sh
+
+	echo -e "Created install script with packages:"
+	echo -e "----------------------------------------"
+	echo -e "${DEBS_LIST}"
+	echo -e "----------------------------------------"
+	return 0
+}
+
+if [ $# -eq 0 ]; then
+	echo "Usage: $0 <deb_file1> [<deb_file2> ...]" >&2
+	exit 2
+fi
+main "$@"
+exit 0
